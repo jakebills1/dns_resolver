@@ -2,6 +2,10 @@ require 'stringio'
 require 'socket'
 require 'pry'
 
+MAX_16_BIT = 2 ** 16 - 1
+COMPRESSION_BITMASK = 0b1100_0000
+LOWER_ORDER_SIX = ~COMPRESSION_BITMASK
+
 TYPES = [
   nil,
   :A,
@@ -52,9 +56,18 @@ def encode_question(question)
   encoded_name + [TYPES.index(question._type), CLASSES.index(question._class)].pack("nn")
 end
 
+def send_query(bytes)
+  sock = UDPSocket.new
+  sock.connect("8.8.8.8", 53)
+  sock.send(bytes, 0)
+  # DNS responses are specified to max 512 bytes
+  resp = sock.recvfrom(1024).first
+end
+
 def get_address(domain_name)
   # build query from domain name
-  id = rand(65536) # random non-negative integer representable in 16 bits
+  # random non-negative integer representable in 16 bits
+  id = rand(MAX_16_BIT + 1)
   # all bits in the flags should be 0, except the 9th from the right that indicates RECURSION_DESIRED
   header = Header.new(id:, flags: 1 << 8, qdcount: 1)
   header_bytes = encode_header(header)
@@ -63,11 +76,7 @@ def get_address(domain_name)
   #
   # send over UDP
   # parse and display response
-  sock = UDPSocket.new
-  sock.connect("8.8.8.8", 53)
-  sock.send(header_bytes + question_bytes, 0)
-  # DNS responses are specified to max 512 bytes
-  resp = sock.recvfrom(1024).first
+  resp = send_query(header_bytes + question_bytes)
   File.write("resp.bin", resp)
   # decode answer
   io = StringIO.new resp
@@ -104,12 +113,13 @@ def parse_rdata(io, answer_type, rdata_len)
   end
 end
 
+
 def decode_answer(io)
   name_len_raw = io.read(1)
   name_len = name_len_raw.unpack1('C')
-  if name_len_raw.to_i & 0b1100_0000 # using DNS compression
+  if name_len_raw.to_i & COMPRESSION_BITMASK # using DNS compression
     second_byte = io.read(1)
-    pointer = ((name_len & 0b0011_1111) << 8) | second_byte.unpack1('C')
+    pointer = ((name_len & LOWER_ORDER_SIX) << 8) | second_byte.unpack1('C')
     current_pos = io.tell
     io.pos = pointer
     domain_name = decode_domain_name(io, io.read(1).unpack1('C'))
