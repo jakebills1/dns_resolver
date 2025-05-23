@@ -90,8 +90,7 @@ end
 
 
 def decode_question(io)
-  initial_name_len = io.read(1).unpack1('C')
-  name = decode_domain_name(io, initial_name_len)
+  name = decode_domain_name(io)
 
   Question.new(
     name: name,
@@ -103,7 +102,7 @@ end
 def parse_rdata(io, answer_type, rdata_len)
   case answer_type
   when :CNAME
-    decode_domain_name(io, io.read(1).unpack1('C'))
+    decode_domain_name(io)
   when :A
     # ip address
     # rdata_len is bytes
@@ -115,18 +114,7 @@ end
 
 
 def decode_answer(io)
-  name_len_raw = io.read(1)
-  name_len = name_len_raw.unpack1('C')
-  if name_len_raw.to_i & COMPRESSION_BITMASK # using DNS compression
-    second_byte = io.read(1)
-    pointer = ((name_len & LOWER_ORDER_SIX) << 8) | second_byte.unpack1('C')
-    current_pos = io.tell
-    io.pos = pointer
-    domain_name = decode_domain_name(io, io.read(1).unpack1('C'))
-    io.pos = current_pos
-  else
-    domain_name = decode_domain_name(io, name_len)
-  end
+  domain_name = decode_domain_name(io)
   ans_type = TYPES[io.read(2).unpack1('n')]
   ans_class = CLASSES[io.read(2).unpack1('n')]
   ans_ttl = io.read(4).unpack1('N')
@@ -141,17 +129,59 @@ def decode_answer(io)
   )
 end
 
-def decode_domain_name(io, name_len)
-  # todo labels can also be pointers ...
+def decode_domain_name(io)
+  # ai slop answer
   domain_name_parts = []
-  until name_len == 0
-    domain_name_parts << io.read(name_len)
-    name_len = io.read(1).unpack1('C')
+
+  loop do
+    name_len_byte = io.read(1)
+    return domain_name_parts.join(".") if name_len_byte.nil?
+
+    name_len = name_len_byte.unpack1('C')
+
+    # Check for compression (top 2 bits are 11)
+    if (name_len & COMPRESSION_BITMASK) == COMPRESSION_BITMASK
+      # This is a compression pointer
+      second_byte = io.read(1)
+      return domain_name_parts.join(".") if second_byte.nil?
+
+      pointer = ((name_len & LOWER_ORDER_SIX) << 8) | second_byte.unpack1('C')
+
+      # Save current position
+      current_pos = io.pos
+
+      # Jump to pointer location and read the rest
+      io.pos = pointer
+      remaining_name = decode_domain_name(io)
+
+      # Restore position
+      io.pos = current_pos
+
+      # Add the remaining part and we're done (compression always ends the sequence)
+      if remaining_name && !remaining_name.empty?
+        if domain_name_parts.empty?
+          return remaining_name
+        else
+          return (domain_name_parts + [remaining_name]).join(".")
+        end
+      else
+        return domain_name_parts.join(".")
+      end
+    elsif name_len == 0
+      # End of domain name
+      break
+    else
+      # Normal label
+      label = io.read(name_len)
+      return domain_name_parts.join(".") if label.nil? || label.length != name_len
+      domain_name_parts << label
+    end
   end
+
   domain_name_parts.join(".")
-rescue NoMethodError => e
-  binding.pry
 end
+
+# Remove the separate decode_compressed function since we handle it all in decode_domain_name now
 
 def parse_response(io)
   header = decode_header(io.read(12))
@@ -169,4 +199,4 @@ def parse_response(io)
   puts answers
 end
 
-get_address "example.com".force_encoding("ASCII-8BIT")
+get_address "www.example.com".force_encoding("ASCII-8BIT")
