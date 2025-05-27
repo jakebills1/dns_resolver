@@ -5,28 +5,34 @@ require 'pry'
 MAX_16_BIT = 2 ** 16 - 1
 COMPRESSION_BITMASK = 0b1100_0000
 LOWER_ORDER_SIX = ~COMPRESSION_BITMASK
+ROOT_NS_IP = "198.41.0.4"
 
-TYPES = [
-  nil,
-  :A,
-  :NS,
-  :MD,
-  :MF,
-  :CNAME,
-  :SOA,
-  :MB,
-  :MG,
-  :MR,
-  :NULL,
-  :WKS,
-  :PTR,
-  :HINFO,
-  :MINFO,
-  :MX,
-  :TXT
-]
+TYPES = {
+  1 => :A,
+  2 => :NS,
+  3 => :MD,
+  4 => :MF,
+  5 => :CNAME,
+  6 => :SOA,
+  7 => :MB,
+  8 => :MG,
+  9 => :MR,
+  10 => :NULL,
+  11 => :WKS,
+  12 => :PTR,
+  13 => :HINFO,
+  14 => :MINFO,
+  15 => :MX,
+  16 => :TXT,
+  28 => :AAAA
+}
 
-CLASSES = [nil, :IN, :CS, :CH, :HS]
+CLASSES = {
+  1 => :IN,
+  2 => :CS,
+  3 => :CH,
+  4 => :HS
+}
 
 Header = Data.define(:id, :flags, :qdcount, :ancount, :nscount, :arcount) do
   def initialize(id:, flags:, qdcount: 0, ancount: 0, nscount: 0, arcount: 0)
@@ -53,12 +59,12 @@ end
 
 def encode_question(question)
   encoded_name = encode_domain_name(question.name)
-  encoded_name + [TYPES.index(question._type), CLASSES.index(question._class)].pack("nn")
+  encoded_name + [TYPES.key(question._type), CLASSES.key(question._class)].pack("nn")
 end
 
 def send_query(bytes)
   sock = UDPSocket.new
-  sock.connect("8.8.8.8", 53)
+  sock.connect(ROOT_NS_IP, 53)
   sock.send(bytes, 0)
   # DNS responses are specified to max 512 bytes
   resp = sock.recvfrom(1024).first
@@ -107,8 +113,13 @@ def parse_rdata(io, answer_type, rdata_len)
     # ip address
     # rdata_len is bytes
     io.read(rdata_len).unpack('CCCC').join('.')
+  when :AAAA
+    # todo parse to ipv6 address
+    io.read(rdata_len)
+  when :NS
+    decode_domain_name(io)
   else
-    raise NotImplementedError
+    raise NotImplementedError, "parsing rdata for #{answer_type} records is not implemented"
   end
 end
 
@@ -181,8 +192,6 @@ def decode_domain_name(io)
   domain_name_parts.join(".")
 end
 
-# Remove the separate decode_compressed function since we handle it all in decode_domain_name now
-
 def parse_response(io)
   header = decode_header(io.read(12))
   puts header
@@ -197,6 +206,25 @@ def parse_response(io)
     answers << decode_answer(io)
   end
   puts answers
+  nameservers = []
+  header.nscount.times do
+    nameservers << decode_answer(io)
+  end
+  puts nameservers
+  addl_records = []
+  header.arcount.times do
+    addl_records << decode_answer(io)
+  end
+  puts addl_records
+
+  # algorithm for recursively finding A records
+  # 1. if answers section including A records display answer
+  # 2. if answers did not include A records:
+  # 3. find IP address in addl_records corresponding to nameservers
+  # 4. for each IP address (?)
+  # 5. send original query over UDP to that IP addr
+  # 6. goto 1
+  #
 end
 
-get_address "www.example.com".force_encoding("ASCII-8BIT")
+get_address "example.com".force_encoding("ASCII-8BIT")
