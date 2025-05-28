@@ -1,6 +1,7 @@
 require 'stringio'
 require 'socket'
 require 'pry'
+require 'ipaddr'
 
 MAX_16_BIT = 2 ** 16 - 1
 COMPRESSION_BITMASK = 0b1100_0000
@@ -44,6 +45,8 @@ Question = Data.define(:name, :_type, :_class)
 
 Answer = Data.define(:name, :_type, :_class, :ttl, :rdlength, :rdata)
 
+Response = Data.define(:header, :questions, :answers, :nameservers, :addl_records)
+
 def encode_header(header)
   header.deconstruct.pack('nnnnnn')
 end
@@ -62,28 +65,28 @@ def encode_question(question)
   encoded_name + [TYPES.key(question._type), CLASSES.key(question._class)].pack("nn")
 end
 
-def send_query(bytes)
+def send_query(bytes, nameserver_ip)
   sock = UDPSocket.new
-  sock.connect(ROOT_NS_IP, 53)
+  sock.connect(nameserver_ip, 53)
   sock.send(bytes, 0)
   # DNS responses are specified to max 512 bytes
   resp = sock.recvfrom(1024).first
 end
 
-def get_address(domain_name)
+def get_address(domain_name, query_type, nameserver_ip)
   # build query from domain name
   # random non-negative integer representable in 16 bits
   id = rand(MAX_16_BIT + 1)
   # all bits in the flags should be 0, except the 9th from the right that indicates RECURSION_DESIRED
-  header = Header.new(id:, flags: 1 << 8, qdcount: 1)
+  header = Header.new(id:, flags: 0, qdcount: 1)
   header_bytes = encode_header(header)
-  question = Question.new(name: domain_name, _type: :A, _class: :IN)
+  question = Question.new(name: domain_name, _type: query_type, _class: :IN)
   question_bytes = encode_question(question)
   #
   # send over UDP
   # parse and display response
-  resp = send_query(header_bytes + question_bytes)
-  File.write("resp.bin", resp)
+  resp = send_query(header_bytes + question_bytes, nameserver_ip)
+  # File.write("resp.bin", resp)
   # decode answer
   io = StringIO.new resp
   io.set_encoding("ASCII-8BIT")
@@ -109,13 +112,8 @@ def parse_rdata(io, answer_type, rdata_len)
   case answer_type
   when :CNAME
     decode_domain_name(io)
-  when :A
-    # ip address
-    # rdata_len is bytes
-    io.read(rdata_len).unpack('CCCC').join('.')
-  when :AAAA
-    # todo parse to ipv6 address
-    io.read(rdata_len)
+  when :A, :AAAA
+    IPAddr.new_ntoh(io.read(rdata_len))
   when :NS
     decode_domain_name(io)
   else
@@ -194,29 +192,36 @@ end
 
 def parse_response(io)
   header = decode_header(io.read(12))
-  puts header
+  # puts header
   # use header to decide number of questions and answers, etc
   questions = []
   header.qdcount.times do
     questions << decode_question(io)
   end
-  puts questions
+  # puts questions
   answers = []
   header.ancount.times do
     answers << decode_answer(io)
   end
-  puts answers
+  # puts answers
   nameservers = []
   header.nscount.times do
     nameservers << decode_answer(io)
   end
-  puts nameservers
+  # puts nameservers
   addl_records = []
   header.arcount.times do
     addl_records << decode_answer(io)
   end
-  puts addl_records
+  # puts addl_records
 
+  Response.new(
+    header:,
+    questions:,
+    answers:,
+    nameservers:,
+    addl_records:
+  )
   # algorithm for recursively finding A records
   # 1. if answers section including A records display answer
   # 2. if answers did not include A records:
@@ -227,4 +232,26 @@ def parse_response(io)
   #
 end
 
-get_address "example.com".force_encoding("ASCII-8BIT")
+def resolve(domain_name, query_type)
+  query_type = query_type.upcase.to_sym
+  nameserver = ROOT_NS_IP
+  loop do
+    puts "Querying #{nameserver} for #{domain_name}"
+    response = get_address domain_name, query_type, nameserver
+    answer = response.answers.first
+    if answer
+      return answer.rdata.to_s
+    end
+    ns_ip = response.addl_records.find { |record| record._type == :A }&.rdata&.to_s
+    if ns_ip
+      nameserver = ns_ip
+    else # we don't have IP address for the nameserver that has this information
+      ns = response.nameservers.first.rdata.to_s
+      # use resolve to get IP address
+      nameserver = resolve(ns, :A)
+    end
+  end
+end
+
+puts resolve ARGV[0] || "example.com", ARGV[1] || :A
+# puts get_address "example.com".force_encoding("ASCII-8BIT"), :A, ROOT_NS_IP
