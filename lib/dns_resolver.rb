@@ -1,3 +1,4 @@
+# encoding: ascii
 require 'stringio'
 require 'socket'
 require 'ipaddr'
@@ -30,7 +31,7 @@ class DNSResolver
   end
 
   private
-  
+
   MAX_16_BIT = 2 ** 16 - 1
   COMPRESSION_BITMASK = 0b1100_0000
   LOWER_ORDER_SIX = ~COMPRESSION_BITMASK
@@ -68,10 +69,10 @@ class DNSResolver
   end
 
   def encode_domain_name(name)
-    encoded = "".force_encoding("ASCII-8BIT")
+    encoded = ""
     name.split(".").each do |part|
       encoded += [part.length].pack("C")
-      encoded += part.force_encoding("ASCII-8BIT")
+      encoded += part
     end
     encoded + "\x00"
   end
@@ -82,6 +83,7 @@ class DNSResolver
   end
 
   def send_query(bytes, nameserver_ip)
+    # todo handle connection errors
     sock = UDPSocket.new
     sock.connect(nameserver_ip, 53)
     sock.send(bytes, 0)
@@ -90,11 +92,12 @@ class DNSResolver
   end
 
   def get_address(domain_name, query_type, nameserver_ip)
+    # refactor: this should maybe instantiate a class that owns the io
+    #
     # build query from domain name
     # random non-negative integer representable in 16 bits
-    id = rand(MAX_16_BIT + 1)
-    # all bits in the flags should be 0, except the 9th from the right that indicates RECURSION_DESIRED
-    header = Header.new(id:, flags: 0, qdcount: 1)
+    id = rand(MAX_16_BIT + 1) # todo should this be the same for each recursive call?
+    header = Header.new(id:, flags: 0, qdcount: 1) # todo this should be part of the configuration of the DNSResolver instance
     header_bytes = encode_header(header)
     question = Question.new(name: domain_name, _type: query_type, _class: :IN)
     question_bytes = encode_question(question)
@@ -102,10 +105,8 @@ class DNSResolver
     # send over UDP
     # parse and display response
     resp = send_query(header_bytes + question_bytes, nameserver_ip)
-    # File.write("resp.bin", resp)
     # decode answer
     io = StringIO.new resp
-    io.set_encoding("ASCII-8BIT")
     parse_response(io)
   end
 
@@ -208,28 +209,22 @@ class DNSResolver
 
   def parse_response(io)
     header = decode_header(io.read(12))
-    # puts header
-    # use header to decide number of questions and answers, etc
     questions = []
     header.qdcount.times do
       questions << decode_question(io)
     end
-    # puts questions
     answers = []
     header.ancount.times do
       answers << decode_answer(io)
     end
-    # puts answers
     nameservers = []
     header.nscount.times do
       nameservers << decode_answer(io)
     end
-    # puts nameservers
     addl_records = []
     header.arcount.times do
       addl_records << decode_answer(io)
     end
-    # puts addl_records
 
     Response.new(
       header:,
@@ -238,13 +233,5 @@ class DNSResolver
       nameservers:,
       addl_records:
     )
-    # algorithm for recursively finding A records
-    # 1. if answers section including A records display answer
-    # 2. if answers did not include A records:
-    # 3. find IP address in addl_records corresponding to nameservers
-    # 4. for each IP address (?)
-    # 5. send original query over UDP to that IP addr
-    # 6. goto 1
-    #
   end
 end
