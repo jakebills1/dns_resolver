@@ -12,6 +12,7 @@ class DNSResolver
   def resolve(domain_name, query_type)
     query_type = query_type.upcase.to_sym
     nameserver = ROOT_NS_IP
+    # todo check cache for domain_name and query_type first
     loop do
       puts "Querying #{nameserver} for #{domain_name}"
       response = get_address domain_name, query_type, nameserver
@@ -144,6 +145,8 @@ class DNSResolver
     ans_type = TYPES[io.read(2).unpack1('n')]
     ans_class = CLASSES[io.read(2).unpack1('n')]
     ans_ttl = io.read(4).unpack1('N')
+    # todo theoretical maximum is 65535 bytes, ie the max amount expressible in 16 bits.
+    # validate against that and raise an error if it exceeds
     rdata_len = io.read(2).unpack1('n')
     Answer.new(
       name: domain_name,
@@ -208,6 +211,8 @@ class DNSResolver
   end
 
   def parse_response(io)
+    # todo check header id against original query id
+    # in a concurrent server, need to match the response to the original query
     header = decode_header(io.read(12))
     questions = []
     header.qdcount.times do
