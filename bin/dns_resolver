@@ -1,5 +1,27 @@
 #!/usr/bin/env ruby
 require 'dns_resolver'
+require 'optionparser'
+# parse command line arguments
+# domain name is required, query type is optional (default is A)
+options = {}
+OptionParser.new do |opts|
+  opts.banner = "Usage: dns_resolver [options] domain_name"
+  opts.on("-t",
+          "--type TYPE",
+          "Query type (default is A)",
+          DNSResolver::TYPES.values.map(&:to_s).map(&:downcase)) do |type|
+    # check against valid types
+    options[:type] = type.upcase.to_sym
+  end
+end.parse!
 
-answer = DNSResolver.new.resolve(ARGV[0], ARGV[1]).rdata.to_s
-puts answer
+options[:type] ||= :A # default query type is A
+domain_name = ARGV.pop
+if domain_name.nil? || domain_name.empty?
+  puts "Domain name is required."
+  puts "Usage: dns_resolver [options] domain_name [query_type]"
+  exit 1
+else
+  answer = DNSResolver.new.resolve(domain_name, options[:type])
+  puts answer
+end

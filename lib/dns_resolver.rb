@@ -10,6 +10,26 @@ require 'dns_resolver/answer'
 require 'dns_resolver/response'
 
 class DNSResolver
+  TYPES = {
+    1 => :A,
+    2 => :NS,
+    3 => :MD,
+    4 => :MF,
+    5 => :CNAME,
+    6 => :SOA,
+    7 => :MB,
+    8 => :MG,
+    9 => :MR,
+    10 => :NULL,
+    11 => :WKS,
+    12 => :PTR,
+    13 => :HINFO,
+    14 => :MINFO,
+    15 => :MX,
+    16 => :TXT,
+    28 => :AAAA
+  }
+
   def redis
     @redis ||= ConnectionPool::Wrapper.new do
       Redis.new(url: ENV["REDIS_URL"])
@@ -17,7 +37,6 @@ class DNSResolver
   end
 
   def resolve(domain_name, query_type)
-    query_type = query_type.upcase.to_sym
     nameserver = ROOT_NS_IP
     cached = redis.get "#{domain_name}:#{query_type}"
     if cached
@@ -52,25 +71,6 @@ class DNSResolver
   LOWER_ORDER_SIX = ~COMPRESSION_BITMASK
   ROOT_NS_IP = "198.41.0.4"
 
-  TYPES = {
-    1 => :A,
-    2 => :NS,
-    3 => :MD,
-    4 => :MF,
-    5 => :CNAME,
-    6 => :SOA,
-    7 => :MB,
-    8 => :MG,
-    9 => :MR,
-    10 => :NULL,
-    11 => :WKS,
-    12 => :PTR,
-    13 => :HINFO,
-    14 => :MINFO,
-    15 => :MX,
-    16 => :TXT,
-    28 => :AAAA
-  }
 
   CLASSES = {
     1 => :IN,
