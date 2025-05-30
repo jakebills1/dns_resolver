@@ -1,4 +1,5 @@
 #!/usr/bin/env ruby
 require 'dns_resolver'
 
-puts DNSResolver.new.resolve(ARGV[0], ARGV[1])
+answer = DNSResolver.new.resolve(ARGV[0], ARGV[1]).rdata.to_s
+puts answer

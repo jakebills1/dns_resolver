@@ -2,31 +2,45 @@
 require 'stringio'
 require 'socket'
 require 'ipaddr'
+require 'connection_pool'
+require 'redis'
 require 'dns_resolver/header'
 require 'dns_resolver/question'
 require 'dns_resolver/answer'
 require 'dns_resolver/response'
 
 class DNSResolver
+  def redis
+    @redis ||= ConnectionPool::Wrapper.new do
+      Redis.new(url: ENV["REDIS_URL"])
+    end
+  end
 
   def resolve(domain_name, query_type)
     query_type = query_type.upcase.to_sym
     nameserver = ROOT_NS_IP
-    # todo check cache for domain_name and query_type first
+    cached = redis.get "#{domain_name}:#{query_type}"
+    if cached
+      puts "Cache hit for #{domain_name} with query type #{query_type}"
+      return cached
+    end
     loop do
       puts "Querying #{nameserver} for #{domain_name}"
       response = get_address domain_name, query_type, nameserver
       answer = response.answers.first
       if answer
-        return answer.rdata.to_s
+        puts "Got answer: #{answer.rdata} for #{domain_name} with query type #{query_type}. Caching for #{answer.ttl} seconds."
+        redis.set "#{domain_name}:#{query_type}", answer.rdata.to_s, ex: answer.ttl
+        return answer
       end
       ns_ip = response.addl_records.find { |record| record._type == :A }&.rdata&.to_s
       if ns_ip
         nameserver = ns_ip
       else # we don't have IP address for the nameserver that has this information
-        ns = response.nameservers.first.rdata.to_s
+        ns_name = response.nameservers.first.rdata.to_s
         # use resolve to get IP address
-        nameserver = resolve(ns, :A)
+        nameserver_answer = resolve(ns_name, :A)
+        nameserver = nameserver_answer.rdata.to_s
       end
     end
   end
